@@ -361,29 +361,217 @@ python -m unittest discover -s tests -t .
 
 ## 11. 설계 설명
 
-### 시계열 데이터 → 요약 → 서비스 활용
-1. `services/prices.py`가 yfinance에서 TQQQ·SOXL 일별 시세를 받아 `prices` 컬렉션에 저장합니다. 이미 있는 날짜는 건너뛰고 빠진 날짜만 채웁니다.
-2. `services/summary.py`가 기간, 개수, 평균, 최대, 최소, 최근 30거래일 변화율과 추세(상승/하락/유지)를 계산하고, 전략별 현재 상태를 한 줄씩 덧붙여 `text`로 만듭니다.
-3. 이 요약은 `GET /api/data/summary`, 요약·통계 화면, AI 채팅의 시스템 프롬프트에 똑같이 쓰입니다.
+### 11.1 용어 정리
 
-### 라우터 / 서비스 / 엔진 / 저장소 분리 기준
-| 층 | 폴더 | 기준 |
+이 문서와 코드에 나오는 개발 용어를 먼저 짧게 정리합니다.
+
+| 용어 | 뜻 | 이 프로젝트에서 |
 | --- | --- | --- |
-| 라우터 | `routers/` | HTTP만 다룸: 주소 정의, API 키 확인, 요청 검증 후 서비스 호출 |
-| 서비스 | `services/` | 업무 흐름: 저장소에서 읽고 엔진으로 계산해 결과를 조합, GPT 호출 |
-| 엔진 | `engine/` | 매매 규칙 계산만. DB·웹을 몰라서 단독 테스트 가능 |
-| 저장소 | `repo/` | 읽기·쓰기만. Firestore와 메모리 구현이 같은 함수 이름을 가져 `STORAGE` 값으로 교체 |
+| **API** | 프로그램끼리 데이터를 주고받는 약속된 창구 | 화면(프론트)이 서버에 "체결 기록 줘", "채팅 보내 줘"를 요청하는 통로 |
+| **엔드포인트** | API 하나의 주소 + 방식 | `GET /api/data/summary`, `POST /api/chat` 등 |
+| **HTTP 메서드** | 요청의 종류. GET(조회), POST(추가), PUT(수정), DELETE(삭제) | CRUD 4개가 각각 하나씩 대응 |
+| **JSON** | `{"date": "2026-10-02", "value": 81.01}`처럼 이름과 값을 묶은 텍스트 형식 | 서버와 화면, 서버와 GPT가 주고받는 데이터 형식 |
+| **CRUD** | Create(추가)·Read(조회)·Update(수정)·Delete(삭제) | 체결 기록 API 4개 |
+| **FastAPI** | 파이썬으로 웹 API 서버를 만드는 라이브러리 | 주소와 함수 연결, 요청 검사, JSON 변환, Swagger 자동 생성 |
+| **Uvicorn** | FastAPI 앱을 실제로 실행해 요청을 받게 하는 서버 프로그램 | `uvicorn app.main:app` |
+| **Swagger UI / OpenAPI** | OpenAPI는 API 목록·입력·출력을 적는 표준 형식, Swagger UI는 그걸 웹 화면으로 보여 주고 직접 실행해 보게 하는 도구 | `/docs` 화면, GPT Actions 스키마 |
+| **Pydantic** | 데이터의 모양(필드, 타입, 범위)을 클래스로 정의하고 자동 검사하는 라이브러리 | `schemas.py`의 `DataIn`, `StrategyIn`, `ChatIn` |
+| **422 오류** | "요청 형식이 규칙에 맞지 않음" 응답 코드 | 날짜 형식이 틀리거나 수량이 0이면 저장 전에 거절 |
+| **Firestore** | 구글 Firebase의 클라우드 NoSQL 데이터베이스. 표 대신 **컬렉션**(문서 묶음)과 **문서**(JSON 같은 한 건)로 저장 | `data`, `conversations` 등 6개 컬렉션 |
+| **서비스 계정 키** | 서버가 Firestore에 접근할 때 쓰는 관리자용 열쇠 파일(JSON) | `.env`·Render Secret File에만 보관 |
+| **환경 변수 / .env** | 코드 밖에서 프로그램에 넘겨주는 설정 값. `.env`는 로컬에서 그 값을 적어 두는 파일 | 키, 주소, 저장소 종류(`STORAGE`) |
+| **CORS** | 브라우저가 "다른 주소의 서버"에 요청할 때 그 서버가 허락했는지 확인하는 보안 규칙 | Vercel 화면 → Render 서버 요청을 `ALLOWED_ORIGINS`로 허락 |
+| **API 키 (`X-API-Key`)** | 요청 헤더에 담아 보내는 비밀 값. 서버가 같은 값인지 확인 | 데이터를 바꾸는 요청에만 요구 |
+| **시스템 프롬프트** | GPT에게 대화 맨 앞에 주는 지시문(역할, 규칙, 참고 자료) | 규칙 요약 + 데이터 요약 |
+| **컨텍스트 주입** | 시스템 프롬프트에 내 데이터를 넣어 GPT가 그 데이터를 바탕으로 답하게 하는 방식 | 매 질문마다 최신 요약을 `[요약]` 자리에 넣음 |
+| **Function Calling** | GPT가 답 대신 "이 함수를 이 값으로 실행해 줘"라고 요청하고, 서버가 실행 결과를 돌려주는 방식 | 조회 도구 5개 |
+| **콜드스타트** | 무료 서버가 잠들어 있다가 첫 요청에 깨어나느라 느려지는 현상 | 화면에 "서버를 깨우는 중" 안내 |
 
-### Pydantic 요청 검증
-`schemas.py`에서 요청 모양을 정의합니다. 예를 들어 `DataIn`은 날짜 형식(`YYYY-MM-DD`), 단가 > 0, 수량 ≥ 1, 매수/매도 값을 검사하고, `StrategyIn`은 "V4.0은 20·40분할만", "VR은 시작 V와 Pool 필수" 같은 규칙을 검사합니다. 잘못된 값은 계산이나 저장 전에 422 오류로 돌려보내므로, 틀린 데이터가 Firestore에 들어가 상태 계산을 망치는 일을 막습니다.
+### 11.2 시계열 데이터 → 요약 → 서비스 활용
 
-### Firestore CRUD
-`repo/firestore.py`가 `get / where / put / add / update / delete`를 제공하고, `services/data.py`가 이를 이용해 체결 기록을 추가·조회·수정·삭제합니다. 수정은 날짜·단가·수량·메모만 허용하고, 전략이나 역할을 바꾸려면 삭제 후 다시 추가하게 해서 기록의 일관성을 지킵니다.
+```mermaid
+flowchart LR
+    Y[yfinance<br/>일별 시세] -->|빠진 날짜만| P[(prices<br/>컬렉션)]
+    D[(data<br/>체결 기록)] --> SM
+    P --> SM[summary.py<br/>요약 계산]
+    SM -->|기간·개수·평균·최대·최소·추세<br/>+ 전략 한 줄 상태| T["summary.text"]
+    T --> A["GET /api/data/summary"]
+    T --> B[요약·통계 화면<br/>AI 비서 오른쪽 칸]
+    T --> C[AI 시스템 프롬프트]
+```
 
-### 컨텍스트 주입
-GPT는 우리 데이터를 모르므로, 매 질문마다 서버가 최신 요약을 만들어 시스템 프롬프트의 `[요약]` 자리에 넣습니다. 그리고 "숫자는 요약이나 도구 결과에 있는 값만 인용하라"고 지시해, 답의 숫자가 항상 Firestore 데이터에서 나오게 합니다. 요약에 없는 숫자는 Function Calling 도구로 조회합니다.
+1. `services/prices.py`가 yfinance에서 TQQQ·SOXL 일별 시세를 받아 `prices` 컬렉션에 저장합니다. 이미 있는 날짜는 건너뛰고 빠진 날짜만 채웁니다. 화면에 접속할 때와 **시세 갱신** 버튼을 누를 때 실행됩니다.
+2. `services/summary.py`가 종목별 기간, 개수, 평균, 최대, 최소, 최근 30거래일 변화율과 추세(+3% 초과 상승, −3% 미만 하락, 그 사이 유지)를 계산하고, 전략별 현재 상태를 한 줄씩 덧붙여 `text`로 만듭니다.
+3. 같은 요약이 API, 화면, AI 프롬프트 세 곳에서 그대로 쓰이므로 사람이 보는 숫자와 AI가 보는 숫자가 항상 같습니다.
 
-### CORS · 환경 변수 · 키 관리
-- **CORS:** 프론트(vercel.app)와 백엔드(onrender.com)의 주소가 달라서, 브라우저는 백엔드가 허락한 주소의 요청만 통과시킵니다. `ALLOWED_ORIGINS`에 Vercel 주소와 로컬 주소만 넣어 다른 사이트가 우리 API를 호출하지 못하게 합니다.
-- **환경 변수:** 로컬(`.env`)과 배포(Render, Vercel)에서 주소·키가 다르므로 코드를 고치지 않고 환경 변수로 바꿉니다.
-- **키 관리:** OpenAI 키와 Firebase 서비스 계정 키는 노출되면 남이 비용을 쓰거나 DB를 고칠 수 있어 `.gitignore`로 제외하고 환경 변수·Secret File로만 넣습니다. 데이터를 바꾸는 API는 `X-API-Key`로 한 번 더 막습니다.
+### 11.3 라우터 / 서비스 / 엔진 / 저장소 분리 기준
+
+```mermaid
+flowchart TB
+    REQ([HTTP 요청]) --> RT
+    subgraph BE["백엔드"]
+        RT["routers/<br/>주소 정의 · API 키 확인 · Pydantic 검사"]
+        SV["services/<br/>업무 흐름 조합 · GPT 호출"]
+        EN["engine/<br/>매매 규칙 계산 (순수 파이썬)"]
+        RP["repo/<br/>저장소 읽기·쓰기"]
+        RT --> SV
+        SV --> EN
+        SV --> RP
+    end
+    RP --> FS[(Firestore)]
+    RP -.->|"STORAGE=memory"| MEM[(메모리)]
+```
+
+| 층 | 폴더 | 기준 | 이렇게 나눈 이유 |
+| --- | --- | --- | --- |
+| 라우터 | `routers/` | HTTP만 다룸: 주소 정의, API 키 확인, 요청 검사 후 서비스 호출 | 주소나 인증 방식이 바뀌어도 계산 코드는 그대로 |
+| 서비스 | `services/` | 업무 흐름: 저장소에서 읽고 엔진으로 계산해 결과를 조합, GPT 호출 | 화면·AI·Actions가 같은 함수를 공유 |
+| 엔진 | `engine/` | 매매 규칙 계산만. DB·웹을 모름 | 카페 원문 예시 표로 단독 테스트 가능 |
+| 저장소 | `repo/` | 읽기·쓰기만. Firestore와 메모리 구현이 같은 함수 이름(`get`, `where`, `put`, `update`, `delete`) | `STORAGE` 값 하나로 저장소 교체, Firebase 없이 개발 가능 |
+
+**요청 하나가 층을 지나는 예** (`GET /api/strategies/{id}/status`)
+
+```mermaid
+sequenceDiagram
+    participant B as 브라우저
+    participant R as routers/strategies.py
+    participant S as services/strategies.py
+    participant P as repo/firestore.py
+    participant E as engine/infinite.py
+    B->>R: GET /api/strategies/321c.../status
+    R->>S: status(repo, "321c...")
+    S->>P: 전략 설정, 체결 기록, 시세 읽기
+    P-->>S: 문서 목록
+    S->>E: 설정 + 날짜별 종가·체결
+    E-->>S: T, 평단, 별지점, 잔금 ...
+    S-->>R: 결과 묶음 (dict)
+    R-->>B: JSON 응답
+```
+
+### 11.4 Pydantic 요청 검증
+
+`schemas.py`에 요청 모양을 클래스로 정의하면, FastAPI가 요청이 들어올 때 자동으로 검사합니다.
+
+```python
+class DataIn(BaseModel):
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")   # YYYY-MM-DD 형식만
+    value: float = Field(gt=0)                           # 체결 단가 > 0
+    qty: int = Field(ge=1)                               # 수량 1주 이상
+    side: Literal["buy", "sell"]                         # 매수/매도만
+    ...
+```
+
+```mermaid
+flowchart LR
+    Q["POST /api/data<br/>{date, value, qty, ...}"] --> V{Pydantic 검사}
+    V -->|통과| SV[services/data.py] --> FS[(Firestore 저장)]
+    V -->|"실패<br/>(예: qty=0, date=10/02)"| E[422 오류 응답<br/>어느 칸이 왜 틀렸는지]
+```
+
+- `StrategyIn`은 "V4.0은 20·40분할만", "VR은 시작 V와 Pool 필수" 같은 규칙도 검사합니다.
+- **이유:** 이 앱은 체결 기록을 처음부터 다시 따라가며 상태를 계산하므로, 잘못된 기록이 한 건만 들어가도 그 뒤의 T·평단이 모두 틀어집니다. 검사를 저장 **전**에 해서 틀린 데이터가 Firestore에 들어가지 않게 막습니다.
+
+### 11.5 Firestore 저장 구조와 CRUD
+
+```mermaid
+erDiagram
+    strategies ||--o{ data : "체결 기록"
+    strategies ||--o{ order_sheets : "날짜별 주문표"
+    strategies ||--o{ vr_snapshots : "VR 갱신 기록"
+    strategies }o--o{ prices : "같은 종목 시세 사용"
+    strategies |o--o{ conversations : "대화 대상 (선택)"
+    data {
+        string date
+        float value
+        string memo
+        string strategy_id
+        string side
+        int qty
+        string role
+    }
+    conversations {
+        string title
+        string strategy_id
+        array messages
+    }
+```
+
+| 화면 동작 | API | 서비스 함수 | repo 함수 | Firestore |
+| --- | --- | --- | --- | --- |
+| 체결 직접 입력 | `POST /api/data` | `create_data` | `add` | `data`에 문서 추가 |
+| 목록 보기·필터 | `GET /api/data` | `list_data` | `where` | `data` 조회 |
+| 수정 | `PUT /api/data/{id}` | `update_data` | `update` | 날짜·단가·수량·메모만 변경 |
+| 삭제 | `DELETE /api/data/{id}` | `delete_data` | `delete` | 문서 삭제 |
+
+수정은 날짜·단가·수량·메모만 허용하고, 전략이나 역할을 바꾸려면 삭제 후 다시 추가하게 해서 기록의 일관성을 지킵니다. 무료 한도(읽기 하루 5만 건)를 지키려고 `repo/firestore.py`가 조회 결과를 서버 메모리에 캐시하고, 쓰기가 생기면 해당 컬렉션 캐시를 비웁니다.
+
+### 11.6 컨텍스트 주입
+
+GPT는 우리 Firestore를 모르므로, 질문이 올 때마다 서버가 최신 요약을 만들어 시스템 프롬프트에 끼워 넣습니다.
+
+```mermaid
+flowchart TB
+    subgraph SP[GPT에게 보내는 메시지]
+        direction TB
+        S1["시스템 프롬프트<br/>① 역할: Rule_Keeper AI 비서<br/>② 지킬 것: 숫자는 요약·도구 결과만 인용, 투자 권유 금지 ...<br/>③ 오늘 날짜<br/>④ 규칙 요약: 별지점, V4.0, V2.2, VR 공식<br/>⑤ [요약] ← summary.text 를 여기에 주입"]
+        S2["이전 대화 (최근 12개)"]
+        S3["이번 질문"]
+        S4["도구 스키마 5개"]
+    end
+    FS[(Firestore)] --> SUM[build_summary] --> S1
+    SP --> G[GPT] --> ANS[요약 숫자를 인용한 답변]
+```
+
+- **효과:** 일반 ChatGPT는 "오늘 내 T가 몇이야?"에 답할 수 없지만, 이 서비스는 요약 안의 `T 4.31/40, 평단 72.86 ...`을 그대로 인용해 답합니다.
+- **환각 방지:** "직접 계산·추정하지 말고 값이 없으면 도구를 호출하라"고 지시해, 요약에 없는 숫자는 Function Calling으로 서버에서 받아 옵니다.
+- **전략 선택:** AI 비서에서 대상 전략을 고르면 그 전략의 상세 상태와 오늘 주문표까지 요약에 넣습니다.
+
+### 11.7 CORS · 환경 변수 · 키 관리
+
+**CORS가 필요한 이유**
+
+```mermaid
+sequenceDiagram
+    participant B as 브라우저<br/>(rulekeeper-frontend.vercel.app)
+    participant S as API 서버<br/>(rule-keeper.onrender.com)
+    B->>S: 사전 확인: 이 주소에서 요청해도 돼?
+    alt ALLOWED_ORIGINS에 Vercel 주소가 있음
+        S-->>B: 허락 (Access-Control-Allow-Origin)
+        B->>S: 실제 요청 (GET /api/orders/today)
+        S-->>B: 데이터
+    else 목록에 없음 (다른 사이트)
+        S-->>B: 허락 표시 없음
+        Note over B: 브라우저가 응답을 막음<br/>"blocked by CORS policy"
+    end
+```
+
+화면(vercel.app)과 서버(onrender.com)의 주소가 다르기 때문에, 서버가 허락한 주소의 화면만 데이터를 읽을 수 있습니다. `ALLOWED_ORIGINS`에는 Vercel 주소와 로컬 개발 주소만 넣었습니다.
+
+**비밀 값은 어디에 있나**
+
+```mermaid
+flowchart LR
+    subgraph GIT[GitHub 저장소 · 공개]
+        C[코드, README<br/>.env.example 예시만]
+    end
+    subgraph LOCAL[내 PC]
+        E[".env<br/>serviceAccountKey.json"]
+    end
+    subgraph RENDER[Render 서버]
+        RE["환경 변수<br/>Secret File"]
+    end
+    subgraph BROWSER[각자의 브라우저]
+        K["연결 설정의 API 키<br/>(localStorage)"]
+    end
+    E -.->|".gitignore로 제외"| NG["GitHub에 올라가지 않음"]
+```
+
+| 값 | 보관 위치 | 노출되면 생기는 일 |
+| --- | --- | --- |
+| OpenAI 키 | `.env`, Render 환경 변수 | 남이 GPT를 호출해 비용·사용량을 씀 |
+| Firebase 서비스 계정 키 | `serviceAccountKey.json`(로컬), Render Secret File | 남이 DB를 마음대로 읽고 고침 |
+| `APP_API_KEY` | `.env`, Render 환경 변수, 각자 브라우저 | 남이 체결 기록을 추가·삭제함 |
+| API 서버 주소 | Vercel 환경 변수 `API_BASE_URL` | 공개 정보 (비밀 아님) |
+
+- **환경 변수를 쓰는 이유:** 로컬과 배포 환경에서 주소·키가 다르므로, 코드를 고치지 않고 실행 환경마다 값만 바꿔 끼웁니다. 또 코드에 키를 적지 않으니 GitHub에 올려도 안전합니다.
+- **API 키를 한 번 더 두는 이유:** CORS는 **브라우저**만 지키는 규칙이라, 프로그램으로 직접 요청하면 막지 못합니다. 그래서 데이터를 바꾸는 요청은 `X-API-Key`가 맞아야만 처리합니다.
