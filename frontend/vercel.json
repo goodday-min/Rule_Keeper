@@ -1,0 +1,4 @@
+{
+  "buildCommand": "node build-config.js",
+  "outputDirectory": "."
+}

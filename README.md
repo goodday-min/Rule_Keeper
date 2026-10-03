@@ -9,7 +9,8 @@
 | 구분 | 주소 |
 | --- | --- |
 | 웹 화면 (Vercel) | https://rulekeeper-frontend.vercel.app |
-| API 서버 (Render) | https://rule-keeper.onrender.com · Swagger 문서 `/docs` |
+| 백엔드 API (Render) | https://rule-keeper.onrender.com |
+| Swagger UI | https://rule-keeper.onrender.com/docs |
 | GPT Actions 스키마 | https://rule-keeper.onrender.com/api/actions/openapi.json |
 
 Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니다. 첫 접속은 30~60초 걸릴 수 있으며, 화면에 "서버를 깨우는 중" 안내가 나옵니다.
@@ -18,7 +19,29 @@ Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니�
 
 ---
 
-## 1. 무엇을 하나요
+## 1. 무엇을 해결하나요
+
+일반 ChatGPT는 내 전략 상태를 모릅니다. "오늘 뭐 걸어야 해?"라고 물어도 일반론만 돌아옵니다.
+무한매수법·VR을 여러 전략으로 동시에 돌리면 전략마다 T, 평단, 별지점, V가 달라서 매일 저녁 손으로 계산하기 번거롭고 실수하기 쉽습니다.
+
+Rule_Keeper는
+- 매일의 시세(시계열 데이터)와 내 체결 기록을 Firestore에 저장하고,
+- 규칙대로 상태와 다음 주문표를 서버가 계산하며,
+- 그 요약을 GPT의 시스템 프롬프트에 넣어 **"내 상황을 아는 AI 비서"**로 답하게 합니다.
+
+## 2. 기술 스택
+
+| 영역 | 사용 기술 |
+| --- | --- |
+| 백엔드 | Python 3.11, FastAPI, Uvicorn, Pydantic, python-dotenv |
+| 데이터베이스 | Firebase Firestore (firebase-admin) |
+| AI | OpenAI API 호환 엔드포인트 (`gpt-5-mini`, Function Calling) |
+| 시세 수집 | yfinance |
+| 프론트엔드 | 바닐라 HTML / CSS / JavaScript (프레임워크·빌드 도구 없음, 그래프는 SVG 직접 작성) |
+| 배포 | Render (백엔드), Vercel (프론트엔드), GitHub |
+| 테스트 | unittest (엔진 30개 + 서비스 17개) |
+
+## 3. 화면과 기능
 
 | 화면 | 내용 |
 | --- | --- |
@@ -45,7 +68,7 @@ Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니�
 
 ---
 
-## 2. 과제 요구사항 대응
+## 4. 과제 요구사항 대응
 
 ### 필수
 
@@ -55,15 +78,20 @@ Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니�
 | data CRUD | `GET/POST /api/data`, `PUT/DELETE /api/data/{id}`. 과제의 `date·value·memo`에 체결 정보(전략, 매수/매도, 수량, 역할)를 더했습니다. `value` = 체결 단가 |
 | 데이터 요약 | `GET /api/data/summary` → 종목별 기간·개수·평균·최대·최소·최근 30거래일 추세 + 전략별 한 줄 상태. `text` 필드가 시스템 프롬프트에 그대로 들어갑니다. |
 | 대화 저장·목록·불러오기·삭제 | `POST/GET /api/conversations`, `GET/DELETE /api/conversations/{id}`. 목록은 messages 없이 개수만, 불러오기는 전체 messages |
-| AI 채팅 | `POST /api/chat`: 요약을 시스템 프롬프트에 주입 → GPT 호출(도구 사용) → 대화 자동 저장 |
+| AI 채팅 | `POST /api/chat`: `/api/data/summary`와 같은 함수(`build_summary`)로 요약 생성 → 시스템 프롬프트에 주입 → GPT 호출(도구 사용) → 대화 자동 저장 |
+| 채팅 화면 | 메시지 입력, 대화 표시, 답을 기다리는 동안 "숫자를 조회하며 답을 쓰는 중" 로딩 표시 |
+| 데이터 요약 화면 | 요약·통계 화면과 AI 비서 오른쪽 칸에 기간·개수·평균·최대·최소·추세 표시 |
+| CORS · Swagger | `CORSMiddleware`로 허용 주소만 받음(`ALLOWED_ORIGINS`), `/docs`에서 Swagger UI 확인 |
+| 키 관리 | OpenAI 키, Firebase 서비스 계정 키, API 키는 환경 변수·Secret File로만 관리 (코드·Git에 없음) |
+| 콜드스타트 대응 | 화면이 열릴 때 `/health`를 먼저 호출하고, 2.5초 넘게 걸리면 "서버를 깨우는 중" 안내 표시 |
 | 저장소 | Firebase Firestore |
-| 프론트엔드 | 바닐라 HTML/CSS/JS (빌드 도구 없음) |
-| 배포 | 백엔드 Render, 프론트엔드 Vercel |
+| 프론트엔드 | 바닐라 HTML/CSS/JS (프레임워크 없음) |
+| 배포 | 백엔드 Render, 프론트엔드 Vercel. Vercel 환경 변수 `API_BASE_URL`로 API 서버 주소를 설정 |
 
 ### 보너스 1: AI 도구 호출(Function Calling) + 멀티채널 연동
 
-- **Function Calling:** 조회 전용 도구 5개를 스키마로 정의해 `/api/chat`에 연결했습니다. → [3. AI 호출 흐름](#3-ai-호출-흐름)
-- **멀티채널 (GPT Actions):** 같은 기능을 조회 API로 공개하고, ChatGPT의 내 GPT에 Actions로 연결합니다. → [4. GPT Actions 연동](#4-gpt-actions-연동)
+- **Function Calling:** 조회 전용 도구 5개를 스키마로 정의해 `/api/chat`에 연결했습니다. → [6. AI 호출 흐름](#6-ai-호출-흐름)
+- **멀티채널 (GPT Actions):** 같은 기능을 조회 API로 공개하고, ChatGPT의 내 GPT에 Actions로 연결합니다. → [7. GPT Actions 연동](#7-gpt-actions-연동)
 
 ### 보너스 2: 인사이트·UX 고도화
 
@@ -77,7 +105,21 @@ Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니�
 
 ---
 
-## 3. AI 호출 흐름
+## 5. 제출 스크린샷
+
+**데이터 요약이 보이는 채팅 화면 (질문 + 답변)**: 오른쪽 "AI가 보는 요약"에 기간·개수·평균·최대·최소·추세가 보이고, 가운데에 질문과 답변이 있습니다.
+
+![채팅과 데이터 요약](docs/images/07_chat_with_summary.png)
+
+**데이터 관리 화면 (CRUD 동작)**: 체결 기록을 추가·수정하는 화면입니다.
+
+![데이터 관리](docs/images/08_data_crud.png)
+
+**대화 기록 화면 (불러오기 동작)**: 왼쪽 대화 기록에서 이전 대화를 고르면 그 대화의 메시지가 다시 표시됩니다.
+
+![대화 불러오기](docs/images/09_conversation_load.png)
+
+## 6. AI 호출 흐름
 
 ### 원칙: 숫자는 서버가, 설명은 GPT가
 
@@ -141,7 +183,7 @@ sequenceDiagram
 
 ---
 
-## 4. GPT Actions 연동
+## 7. GPT Actions 연동
 
 웹 화면 외에 ChatGPT(내 GPT)에서도 같은 데이터를 조회할 수 있게 연결합니다.
 
@@ -171,7 +213,7 @@ flowchart LR
 
 ---
 
-## 5. 구조
+## 8. 구조
 
 ```mermaid
 flowchart TB
@@ -230,7 +272,7 @@ render.yaml      Render 배포 설정
 
 ---
 
-## 6. 주요 API
+## 9. 주요 API
 
 | 메서드 · 경로 | 설명 | 키 필요 |
 | --- | --- | --- |
@@ -255,13 +297,13 @@ render.yaml      Render 배포 설정
 
 ---
 
-## 7. 실행과 배포
+## 10. 실행과 배포
 
 ### 로컬 실행
 
 ```bash
 cd backend
-python -m venv .venv
+python -m venv .venv            # Python 3.10 이상
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 copy .env.example .env          # macOS/Linux: cp .env.example .env  → 값 채우기
@@ -294,10 +336,16 @@ Firebase 없이 확인하려면 `.env`에서 `STORAGE=memory`로 두면 됩니�
 | `ALLOWED_ORIGINS` | CORS 허용 주소 (쉼표 구분, 끝에 `/` 없이) |
 | `PUBLIC_API_URL` | GPT Actions 스키마에 들어갈 서버 주소 |
 
+프론트엔드(Vercel) 환경 변수
+
+| 이름 | 용도 |
+| --- | --- |
+| `API_BASE_URL` | 백엔드 API 주소 (예: `https://rule-keeper.onrender.com`). 빌드 때 `build-config.js`가 이 값으로 `config.js`를 만듭니다. 없으면 저장소의 `config.js`(로컬 → `127.0.0.1:8000`, 배포 → Render)를 그대로 씁니다. |
+
 ### 배포
 
 - **Render (백엔드):** Web Service, Root Directory `backend`, Build `pip install -r requirements.txt`, Start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, `PYTHON_VERSION=3.11.9`. Firebase 키 파일은 Secret File(`/etc/secrets/serviceAccountKey.json`)로 넣고 `FIREBASE_CREDENTIALS_PATH`로 가리킵니다.
-- **Vercel (프론트엔드):** Root Directory `frontend`, Framework Preset `Other`, 빌드 없음
+- **Vercel (프론트엔드):** Root Directory `frontend`, Framework Preset `Other`. `frontend/vercel.json`이 빌드 명령(`node build-config.js`)과 출력 폴더(`.`)를 지정하고, 환경 변수 `API_BASE_URL`에 Render 주소를 넣습니다.
 - **보안:** `.env`와 서비스 계정 키는 `.gitignore`로 저장소에서 제외했습니다. API 키는 코드·README·캡처에 넣지 않습니다.
 
 ### 테스트
@@ -308,3 +356,34 @@ python -m unittest discover -s tests -t .
 ```
 
 엔진 테스트는 라오어 카페 원문의 예시 표(T, 별%, 주문 가격·수량)를 그대로 재현하는지 확인합니다.
+
+---
+
+## 11. 설계 설명
+
+### 시계열 데이터 → 요약 → 서비스 활용
+1. `services/prices.py`가 yfinance에서 TQQQ·SOXL 일별 시세를 받아 `prices` 컬렉션에 저장합니다. 이미 있는 날짜는 건너뛰고 빠진 날짜만 채웁니다.
+2. `services/summary.py`가 기간, 개수, 평균, 최대, 최소, 최근 30거래일 변화율과 추세(상승/하락/유지)를 계산하고, 전략별 현재 상태를 한 줄씩 덧붙여 `text`로 만듭니다.
+3. 이 요약은 `GET /api/data/summary`, 요약·통계 화면, AI 채팅의 시스템 프롬프트에 똑같이 쓰입니다.
+
+### 라우터 / 서비스 / 엔진 / 저장소 분리 기준
+| 층 | 폴더 | 기준 |
+| --- | --- | --- |
+| 라우터 | `routers/` | HTTP만 다룸: 주소 정의, API 키 확인, 요청 검증 후 서비스 호출 |
+| 서비스 | `services/` | 업무 흐름: 저장소에서 읽고 엔진으로 계산해 결과를 조합, GPT 호출 |
+| 엔진 | `engine/` | 매매 규칙 계산만. DB·웹을 몰라서 단독 테스트 가능 |
+| 저장소 | `repo/` | 읽기·쓰기만. Firestore와 메모리 구현이 같은 함수 이름을 가져 `STORAGE` 값으로 교체 |
+
+### Pydantic 요청 검증
+`schemas.py`에서 요청 모양을 정의합니다. 예를 들어 `DataIn`은 날짜 형식(`YYYY-MM-DD`), 단가 > 0, 수량 ≥ 1, 매수/매도 값을 검사하고, `StrategyIn`은 "V4.0은 20·40분할만", "VR은 시작 V와 Pool 필수" 같은 규칙을 검사합니다. 잘못된 값은 계산이나 저장 전에 422 오류로 돌려보내므로, 틀린 데이터가 Firestore에 들어가 상태 계산을 망치는 일을 막습니다.
+
+### Firestore CRUD
+`repo/firestore.py`가 `get / where / put / add / update / delete`를 제공하고, `services/data.py`가 이를 이용해 체결 기록을 추가·조회·수정·삭제합니다. 수정은 날짜·단가·수량·메모만 허용하고, 전략이나 역할을 바꾸려면 삭제 후 다시 추가하게 해서 기록의 일관성을 지킵니다.
+
+### 컨텍스트 주입
+GPT는 우리 데이터를 모르므로, 매 질문마다 서버가 최신 요약을 만들어 시스템 프롬프트의 `[요약]` 자리에 넣습니다. 그리고 "숫자는 요약이나 도구 결과에 있는 값만 인용하라"고 지시해, 답의 숫자가 항상 Firestore 데이터에서 나오게 합니다. 요약에 없는 숫자는 Function Calling 도구로 조회합니다.
+
+### CORS · 환경 변수 · 키 관리
+- **CORS:** 프론트(vercel.app)와 백엔드(onrender.com)의 주소가 달라서, 브라우저는 백엔드가 허락한 주소의 요청만 통과시킵니다. `ALLOWED_ORIGINS`에 Vercel 주소와 로컬 주소만 넣어 다른 사이트가 우리 API를 호출하지 못하게 합니다.
+- **환경 변수:** 로컬(`.env`)과 배포(Render, Vercel)에서 주소·키가 다르므로 코드를 고치지 않고 환경 변수로 바꿉니다.
+- **키 관리:** OpenAI 키와 Firebase 서비스 계정 키는 노출되면 남이 비용을 쓰거나 DB를 고칠 수 있어 `.gitignore`로 제외하고 환경 변수·Secret File로만 넣습니다. 데이터를 바꾸는 API는 `X-API-Key`로 한 번 더 막습니다.
