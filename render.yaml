@@ -1,0 +1,32 @@
+# Render 배포 설정 (Blueprint). 비밀 값은 Render 대시보드에서 입력한다 (sync: false).
+services:
+  - type: web
+    name: rule-keeper-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        value: https://copa.codyssey.kr/v1
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: FIREBASE_CREDENTIALS
+        sync: false
+      - key: APP_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PUBLIC_API_URL
+        sync: false
+      - key: STORAGE
+        value: firestore
+      - key: TICKERS
+        value: TQQQ,SOXL
+      - key: PRICE_START
+        value: "2024-01-01"

@@ -1,0 +1,18 @@
+# 비밀 값
+.env
+*.env
+!.env.example
+serviceAccountKey*.json
+*firebase-adminsdk*.json
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# 기타
+.DS_Store
+Thumbs.db
+*.zip

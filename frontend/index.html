@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rule_Keeper · 분할매수 기록장</title>
+  <meta name="description" content="라오어 무한매수법(V2.2·V4.0)과 VR 5.0 주문표 계산, 체결 기록, AI 비서">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d2a38'/%3E%3Cpath d='M8 22h4v-6H8zm6 0h4V10h-4zm6 0h4v-9h-4z' fill='%23f4f5f1'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    // 화면이 깜빡이지 않게 테마를 먼저 적용한다
+    try { const t = localStorage.getItem('rk_theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <script src="config.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+  <div class="shell">
+    <aside class="side">
+      <a class="brand" href="#/">
+        <span class="brand-name">Rule_Keeper</span>
+        <span class="brand-sub">분할매수 기록장</span>
+      </a>
+      <nav class="nav" aria-label="주요 메뉴">
+        <a href="#/" data-nav="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/></svg><span>오늘 주문</span></a>
+        <a href="#/strategies" data-nav="strategies"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7"/></svg><span>전략</span></a>
+        <a href="#/data" data-nav="data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM9 9h6M9 13h6M9 17h3"/></svg><span>체결 기록</span></a>
+        <a href="#/summary" data-nav="summary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18l5-6 4 3 7-9"/></svg><span>요약·통계</span></a>
+        <a href="#/chat" data-nav="chat"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H10l-5 4z"/></svg><span>AI 비서</span></a>
+      </nav>
+      <div class="side-foot">
+        <button class="ghost" id="themeBtn" type="button" aria-label="다크 모드 전환">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg><span>테마</span>
+        </button>
+        <button class="ghost" id="settingsBtn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1"/></svg><span>연결 설정</span>
+        </button>
+        <p class="disclaimer">규칙 계산 보조 도구이며 투자 권유가 아닙니다.</p>
+      </div>
+    </aside>
+
+    <main id="main" tabindex="-1">
+      <div id="banner" class="banner" hidden></div>
+      <div id="view"></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="modal"><div id="modalBody"></div></dialog>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
