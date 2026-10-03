@@ -185,8 +185,8 @@ flowchart TB
     end
     UI -->|fetch + X-API-Key| R
     RP --> FS[(Firestore)]
-    SV -->|Function Calling| GPT[GPT]
-    SV -->|시세| YF[yfinance]
+    SV --> GPT["GPT<br/>(Function Calling)"]
+    SV --> YF["yfinance<br/>(시세)"]
 ```
 
 ### 설계 원칙
