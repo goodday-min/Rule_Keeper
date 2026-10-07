@@ -55,6 +55,35 @@ class PriceSync(Base):
         r = price_svc.sync(self.repo, ["TQQQ"], "2025-09-01", fake_provider(n=262))
         self.assertEqual(r["TQQQ"]["added"], 2)          # 빠진 날짜만
 
+    def test_intraday_bar_skipped_and_removed(self):
+        """장중(뉴욕 17시 전)에 받은 오늘 행은 저장하지 않고, 이미 저장된 장중 행은 지운다."""
+        from datetime import datetime, timezone, timedelta
+        ny = timezone(timedelta(hours=-4))
+        last = self.last
+        today = next_trading_day(last)
+        add_price(self.repo, "TQQQ", today, 999.0)                 # 예전에 저장된 장중 가격
+        def prov(t, s):
+            return [{"date": today, "open": 1, "high": 1, "low": 1, "close": 123.0}]
+        noon = datetime.fromisoformat(today + "T12:00:00").replace(tzinfo=ny)
+        r = price_svc.sync(self.repo, ["TQQQ"], "2025-09-01", prov, now=noon)
+        self.assertEqual(r["TQQQ"]["removed"], 1)
+        self.assertEqual(r["TQQQ"]["last_date"], last)
+        self.assertIsNone(self.repo.get(PRICES, f"TQQQ_{today}"))
+        evening = datetime.fromisoformat(today + "T18:00:00").replace(tzinfo=ny)
+        r = price_svc.sync(self.repo, ["TQQQ"], "2025-09-01", prov, now=evening)
+        self.assertEqual(r["TQQQ"]["added"], 1)
+        self.assertEqual(self.repo.get(PRICES, f"TQQQ_{today}")["close"], 123.0)
+
+    def test_stale_future_sheet_removed(self):
+        s = svc.create_strategy(self.repo, {"type": "infinite", "ticker": "TQQQ", "rule_version": "v4.0",
+                                            "splits": 40, "principal": 20000, "start_date": "2025-09-01"})
+        later = next_trading_day(next_trading_day(self.last))
+        self.repo.put(ORDER_SHEETS, f"{s['id']}_{later}", {"strategy_id": s["id"], "date": later,
+                                                          "status": "pending", "lines": []})
+        sheet = svc.build_next_sheet(self.repo, s["id"])
+        self.assertEqual(sheet["date"], next_trading_day(self.last))
+        self.assertIsNone(self.repo.get(ORDER_SHEETS, f"{s['id']}_{later}"))
+
     def test_provider_error_kept(self):
         def boom(t, s):
             raise RuntimeError("network")

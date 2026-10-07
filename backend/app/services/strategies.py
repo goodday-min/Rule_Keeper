@@ -253,6 +253,10 @@ def build_next_sheet(repo: Repo, sid: str) -> dict:
             raise Conflict("시세가 없습니다. 먼저 시세를 동기화하세요")
         sheet = make_engine(inf_settings(s)).next_orders(st, float(lp["close"]))
     date = next_trading_day(lp["date"])
+    # 장중 시세로 잘못 만들어졌던 '앞선 날짜'의 미확정 주문표는 지운다 (시세 동기화가 장중 행을 지운 경우)
+    for x in repo.where(ORDER_SHEETS, "strategy_id", sid):
+        if x.get("status") == "pending" and x["date"] > date:
+            repo.delete(ORDER_SHEETS, x["id"])
     sheet_id = f"{sid}_{date}"
     existing = repo.get(ORDER_SHEETS, sheet_id)
     if existing and existing.get("status") == "confirmed":
