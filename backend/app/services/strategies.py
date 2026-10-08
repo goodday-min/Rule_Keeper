@@ -267,6 +267,9 @@ def build_next_sheet(repo: Repo, sid: str) -> dict:
     unconfirmed = [x for x in repo.where(ORDER_SHEETS, "strategy_id", sid)
                    if x["status"] == "pending" and x["date"] <= lp["date"]]
     doc["provisional"] = bool(unconfirmed)       # 이전 체결이 확정되지 않았으면 임시 주문표
+    same = ("based_on", "status", "lines", "meta", "provisional")
+    if existing and all(existing.get(k) == doc[k] for k in same):
+        return existing                          # 바뀐 것이 없으면 다시 쓰지 않는다 (Firestore 쓰기 절약)
     return repo.put(ORDER_SHEETS, sheet_id, doc)
 
 

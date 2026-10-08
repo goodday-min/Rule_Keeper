@@ -17,10 +17,11 @@ from ..config import settings
 from .base import CONVERSATIONS, DATA, ORDER_SHEETS, PRICES, STRATEGIES, VR_SNAPSHOTS
 
 # 상태는 매번 체결을 재생해 계산하므로 목록 조회(where)가 많다. Firestore 무료 한도(읽기 하루 5만 건)를
-# 지키려고 조회 결과를 서버 메모리에 캐시한다. 이 서버를 거치는 쓰기는 그 컬렉션 캐시를 바로 비우고,
+# 지키려고 컬렉션 전체를 한 번 읽어 서버 메모리에 보관하고, 조회·필터는 메모리에서 처리한다.
+# 이 서버를 거치는 쓰기는 Firestore와 캐시를 함께 고치므로(write-through) 쓰기 뒤에 다시 읽지 않는다.
 # Firebase 콘솔에서 직접 고친 내용은 CACHE_TTL초 안에 반영된다.
 CACHED_COLLECTIONS = {PRICES, STRATEGIES, DATA, ORDER_SHEETS, VR_SNAPSHOTS, CONVERSATIONS}
-CACHE_TTL = 600
+CACHE_TTL = 6 * 3600
 
 
 def _load_credentials():
@@ -42,70 +43,110 @@ def _load_credentials():
 
 
 class FirestoreRepo:
-    def __init__(self):
-        _load_credentials()
-        from firebase_admin import firestore
-        self.db = firestore.client()
-        self._cache: dict[tuple, tuple[float, list[dict]]] = {}
+    def __init__(self, db=None):
+        if db is None:
+            _load_credentials()
+            from firebase_admin import firestore
+            db = firestore.client()
+        self.db = db
+        self._cache: dict[str, tuple[float, dict[str, dict]]] = {}   # 컬렉션 -> (읽은 시각, {id: 문서})
+        self.reads = 0                                                # 시험·점검용 읽기 횟수
 
-    def _invalidate(self, col):
-        if col in CACHED_COLLECTIONS:
-            self._cache = {k: v for k, v in self._cache.items() if k[0] != col}
+    # --- 캐시 -------------------------------------------------------------
+    def _docs(self, col) -> Optional[dict[str, dict]]:
+        """캐시 대상 컬렉션이면 전체 문서 {id: doc}를 돌려준다 (없거나 오래되면 한 번 전체 읽기)."""
+        if col not in CACHED_COLLECTIONS:
+            return None
+        hit = self._cache.get(col)
+        if hit and time.monotonic() - hit[0] < CACHE_TTL:
+            return hit[1]
+        docs = {}
+        for snap in self.db.collection(col).stream():
+            self.reads += 1
+            docs[snap.id] = self._with_id(snap)
+        self._cache[col] = (time.monotonic(), docs)
+        return docs
+
+    def _cached(self, col) -> Optional[dict[str, dict]]:
+        """이미 캐시에 있으면 그 dict (쓰기 반영용). 없으면 None (다음 조회 때 읽으면 됨)."""
+        hit = self._cache.get(col)
+        return hit[1] if hit and time.monotonic() - hit[0] < CACHE_TTL else None
+
+    def invalidate(self, col=None):
+        if col is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(col, None)
 
     def _with_id(self, snap) -> dict:
         d = snap.to_dict() or {}
         d["id"] = snap.id
         return d
 
+    # --- 읽기 -------------------------------------------------------------
     def get(self, col, doc_id) -> Optional[dict]:
+        docs = self._docs(col)
+        if docs is not None:
+            d = docs.get(doc_id)
+            return copy.deepcopy(d) if d else None
         snap = self.db.collection(col).document(doc_id).get()
+        self.reads += 1
         return self._with_id(snap) if snap.exists else None
 
+    def where(self, col, field=None, value=None):
+        docs = self._docs(col)
+        if docs is None:
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            q = self.db.collection(col)
+            if field is not None:
+                q = q.where(filter=FieldFilter(field, "==", value))
+            out = [self._with_id(s) for s in q.stream()]
+            self.reads += len(out)
+            return out
+        out = [d for _, d in sorted(docs.items()) if field is None or d.get(field) == value]
+        return copy.deepcopy(out)
+
+    # --- 쓰기 (Firestore + 캐시 함께) ---------------------------------------
     def put(self, col, doc_id, doc):
-        self._invalidate(col)
         body = {k: v for k, v in doc.items() if k != "id"}
         self.db.collection(col).document(doc_id).set(body)
+        cached = self._cached(col)
+        if cached is not None:
+            cached[doc_id] = copy.deepcopy({**body, "id": doc_id})
         return {**body, "id": doc_id}
 
     def add(self, col, doc):
         return self.put(col, uuid.uuid4().hex[:20], doc)
 
     def update(self, col, doc_id, fields):
-        self._invalidate(col)
-        ref = self.db.collection(col).document(doc_id)
-        if not ref.get().exists:
+        cur = self.get(col, doc_id)
+        if cur is None:
             return None
-        ref.update({k: v for k, v in fields.items() if k != "id"})
-        return self.get(col, doc_id)
+        body = {k: v for k, v in fields.items() if k != "id"}
+        self.db.collection(col).document(doc_id).update(body)
+        cur.update(body)
+        cached = self._cached(col)
+        if cached is not None:
+            cached[doc_id] = copy.deepcopy(cur)
+        return cur
 
     def delete(self, col, doc_id):
-        self._invalidate(col)
-        ref = self.db.collection(col).document(doc_id)
-        if not ref.get().exists:
+        if self.get(col, doc_id) is None:
             return False
-        ref.delete()
+        self.db.collection(col).document(doc_id).delete()
+        cached = self._cached(col)
+        if cached is not None:
+            cached.pop(doc_id, None)
         return True
 
-    def where(self, col, field=None, value=None):
-        from google.cloud.firestore_v1.base_query import FieldFilter
-
-        key = (col, field, value)
-        hit = self._cache.get(key) if col in CACHED_COLLECTIONS else None
-        if hit and time.monotonic() - hit[0] < CACHE_TTL:
-            return copy.deepcopy(hit[1])
-        q = self.db.collection(col)
-        if field is not None:
-            q = q.where(filter=FieldFilter(field, "==", value))
-        docs = [self._with_id(s) for s in q.stream()]
-        if col in CACHED_COLLECTIONS:
-            self._cache[key] = (time.monotonic(), copy.deepcopy(docs))
-        return docs
-
     def put_many(self, col, docs: Iterable[tuple[str, dict]]):
-        self._invalidate(col)
+        cached = self._cached(col)
         n, batch = 0, self.db.batch()
         for doc_id, doc in docs:
-            batch.set(self.db.collection(col).document(doc_id), {k: v for k, v in doc.items() if k != "id"})
+            body = {k: v for k, v in doc.items() if k != "id"}
+            batch.set(self.db.collection(col).document(doc_id), body)
+            if cached is not None:
+                cached[doc_id] = copy.deepcopy({**body, "id": doc_id})
             n += 1
             if n % 400 == 0:           # Firestore 배치 한도 500
                 batch.commit()
@@ -114,15 +155,16 @@ class FirestoreRepo:
         return n
 
     def delete_where(self, col, field, value):
-        self._invalidate(col)
         docs = self.where(col, field, value)
+        cached = self._cached(col)
         batch, n = self.db.batch(), 0
         for d in docs:
             batch.delete(self.db.collection(col).document(d["id"]))
+            if cached is not None:
+                cached.pop(d["id"], None)
             n += 1
             if n % 400 == 0:
                 batch.commit()
                 batch = self.db.batch()
         batch.commit()
-        self._invalidate(col)          # 위의 where가 캐시를 다시 채웠으므로 한 번 더 비운다
         return n
