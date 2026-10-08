@@ -337,7 +337,21 @@ python ..\mcp_server\test_client.py get_portfolio_summary
 | Render Logs | `GET /api/orders/today` 요청이 찍힘 (MCP → 백엔드 호출 확인) |
 | 오류 처리 | 없는 전략 id를 넣으면 프로그램이 멈추지 않고 `{"error": "API 오류 404: ..."}`를 돌려줌 |
 
-**검증 결과:** _실행 화면과 웹 화면 비교 캡처를 추가할 예정입니다._
+### 검증 결과
+
+**1) 도구 목록 (MCP `tools/list`)** — `test_client.py`가 MCP 서버를 실행하고 받은 도구 5개입니다. 설명 문구(docstring)가 그대로 전달되어 AI가 도구를 고르는 근거가 됩니다.
+
+![MCP 도구 목록](docs/images/10_mcp_tool_list.png)
+
+**2) 도구 호출 (MCP `tools/call get_today_orders`)**
+
+| 확인한 것 | 결과 |
+| --- | --- |
+| MCP 클라이언트 → MCP 서버 → Render API 호출 | ✅ 운용 중 전략 4개(이름·id·실전/시뮬레이션 구분)와 체결 확인 대기 날짜(`2026-10-07`)를 받아 옴. 웹 "오늘 주문" 화면의 전략 4개와 같음 |
+| 오류 처리 | ✅ 첫 시험 때 Firestore 읽기 한도 초과(429)가 났지만, MCP 서버는 멈추지 않고 전략별 `"error": "429 Quota exceeded."`를 결과로 돌려줌 → AI가 사용자에게 원인을 설명할 수 있음 |
+| 주문표 숫자 비교 (가격·수량) | _한도 초기화 후 다시 확인해 추가 예정_ |
+
+첫 시험에서 발견한 Firestore 한도 문제는 캐시 구조를 고쳐 해결했습니다 → [13장](#13-개발-중-겪은-문제와-해결)
 
 ---
 
