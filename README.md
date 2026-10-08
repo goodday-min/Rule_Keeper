@@ -15,7 +15,7 @@
 
 Render 무료 요금제라 15분 동안 접속이 없으면 서버가 잠듭니다. 첫 접속은 30~60초 걸릴 수 있으며, 화면에 "서버를 깨우는 중" 안내가 나옵니다.
 
-![오늘 주문 화면](docs/images/01_today_orders.png)
+![오늘 주문 화면](docs/images/01_today_orders1.png)
 
 ### 목차
 
