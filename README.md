@@ -121,7 +121,7 @@ flowchart LR
 
 | # | 과제 목표 | 한 줄 답 (이 프로젝트에서는) | 코드 위치 | 자세히 |
 | --- | --- | --- | --- | --- |
-| 1 | 시계열 데이터를 분석하고 요약 정보를 만들어 서비스에서 활용하는 흐름 | 일별 시세(날짜순 데이터)를 Firestore `prices`에 쌓고 → `build_summary()`가 기간·개수·평균·최대·최소·30일 추세와 전략 상태를 계산해 `summary.text`를 만들고 → 이 **하나의 요약**을 API·화면·AI 프롬프트가 함께 씁니다. | `services/summary.py` (`build_summary`), `services/prices.py`, `GET /api/data/summary` | [11.2](#112-시계열-데이터--요약--서비스-활용) |
+| 1 | 시계열 데이터를 분석하고 요약 정보를 만들어 서비스에서 활용하는 흐름 | 일별 시세(날짜순 데이터)를 Firestore `prices`에 쌓고 → `build_summary()`가 기간·개수·평균·최대·최소·30일 추세와 전략 상태를 계산해 요약 글(결과의 `text` 칸)을 만들고 → 이 **하나의 요약**을 API·화면·AI 프롬프트가 함께 씁니다. | `services/summary.py` (`build_summary`), `services/prices.py`, `GET /api/data/summary` | [11.2](#112-시계열-데이터--요약--서비스-활용) |
 | 2 | FastAPI 프로젝트를 라우터/서비스 등으로 분리한 기준 | **"무엇을 다루는가"**로 나눴습니다. 라우터는 HTTP(주소·인증·검사)만, 서비스는 업무 흐름, 엔진은 매매 계산만, 저장소(repo)는 DB 읽기·쓰기만 합니다. 그래서 각 층을 따로 바꾸고 따로 테스트할 수 있습니다. | `app/routers/`, `app/services/`, `app/engine/`, `app/repo/` | [11.3](#113-라우터--서비스--엔진--저장소-분리-기준) |
 | 3 | Pydantic으로 요청 데이터 검증을 적용한 이유와 방식 | 체결 기록 한 건이 틀리면 그 뒤 상태가 모두 틀어지므로, **저장 전에** 서버에서 막아야 합니다. `schemas.py`에 `DataIn` 같은 클래스로 형식(날짜 패턴, 단가 > 0, 수량 ≥ 1, 매수/매도만)을 적으면 FastAPI가 자동으로 검사하고 틀리면 422로 거절합니다. | `app/schemas.py` (`DataIn`, `StrategyIn`, `ChatIn`) | [11.4](#114-pydantic-요청-검증) |
 | 4 | Firestore에 데이터를 저장하고 CRUD로 다루는 방법 | `data` 컬렉션에 문서(JSON 한 건)로 저장하고, `POST`(추가)·`GET`(조회)·`PUT`(수정)·`DELETE`(삭제) 4개 API가 각각 repo의 `add`·`where`·`update`·`delete`를 부릅니다. 대화는 `conversations` 컬렉션에 저장합니다. | `app/repo/firestore.py`, `services/data.py`, `routers/data.py` | [11.5](#115-firestore-저장-구조와-crud) |
@@ -237,7 +237,7 @@ sequenceDiagram
 
     U->>S: 질문 (+ 대화 id, 선택 전략 id)
     S->>F: 시세·전략 읽기
-    S->>S: 요약 생성 (summary.text)
+    S->>S: 요약 생성 (build_summary 결과의 text)
     S->>G: 시스템 프롬프트(규칙 + 요약) + 이전 대화 + 질문 + 도구 스키마 5개
     alt 요약만으로 답할 수 있음
         G-->>S: 답변
@@ -662,7 +662,7 @@ flowchart LR
     Y[yfinance<br/>일별 시세] -->|빠진 날짜만| P[(prices<br/>컬렉션)]
     D[(data<br/>체결 기록)] --> SM
     P --> SM[summary.py<br/>요약 계산]
-    SM -->|기간·개수·평균·최대·최소·추세<br/>+ 전략 한 줄 상태| T["summary.text"]
+    SM -->|기간·개수·평균·최대·최소·추세<br/>+ 전략 한 줄 상태| T["요약 글 (text 칸)<br/>파일·DB에 저장하지 않음"]
     T --> A["GET /api/data/summary"]
     T --> B[요약·통계 화면<br/>AI 비서 오른쪽 칸]
     T --> C[AI 시스템 프롬프트]
@@ -671,6 +671,7 @@ flowchart LR
 1. `services/prices.py`가 yfinance에서 TQQQ·SOXL 일별 시세를 받아 `prices` 컬렉션에 저장합니다. 이미 있는 날짜는 건너뛰고 빠진 날짜만 채웁니다. 화면에 접속할 때와 **시세 갱신** 버튼을 누를 때 실행됩니다.
 2. `services/summary.py`가 종목별 기간, 개수, 평균, 최대, 최소, 최근 30거래일 변화율과 추세(+3% 초과 상승, −3% 미만 하락, 그 사이 유지)를 계산하고, 전략별 현재 상태를 한 줄씩 덧붙여 `text`로 만듭니다.
 3. 같은 요약이 API, 화면, AI 프롬프트 세 곳에서 그대로 쓰이므로 사람이 보는 숫자와 AI가 보는 숫자가 항상 같습니다.
+4. 요약 글은 **파일이나 DB에 저장하지 않습니다.** 요청이 올 때마다 `build_summary()`가 메모리에서 새로 만들어 응답(JSON의 `text` 칸)이나 프롬프트에 넣고, 요청이 끝나면 사라집니다. 그래서 방금 확정한 체결도 다음 질문부터 바로 반영됩니다.
 
 **요약에 들어가는 지표와 계산 방법**
 
@@ -876,7 +877,7 @@ GPT는 우리 Firestore를 모르므로, 질문이 올 때마다 서버가 최�
 flowchart TB
     subgraph SP[GPT에게 보내는 메시지]
         direction TB
-        S1["시스템 프롬프트<br/>① 역할: Rule_Keeper AI 비서<br/>② 지킬 것: 숫자는 요약·도구 결과만 인용, 투자 권유 금지 ...<br/>③ 오늘 날짜<br/>④ 규칙 요약: 별지점, V4.0, V2.2, VR 공식<br/>⑤ [요약] ← summary.text 를 여기에 주입"]
+        S1["시스템 프롬프트<br/>① 역할: Rule_Keeper AI 비서<br/>② 지킬 것: 숫자는 요약·도구 결과만 인용, 투자 권유 금지 ...<br/>③ 오늘 날짜<br/>④ 규칙 요약: 별지점, V4.0, V2.2, VR 공식<br/>⑤ [요약] ← 요약 글(text)을 여기에 주입"]
         S2["이전 대화 (최근 12개)"]
         S3["이번 질문"]
         S4["도구 스키마 5개"]
