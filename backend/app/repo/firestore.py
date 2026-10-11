@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import threading
 import time
 import uuid
 from typing import Iterable, Optional
@@ -24,7 +25,15 @@ CACHED_COLLECTIONS = {PRICES, STRATEGIES, DATA, ORDER_SHEETS, VR_SNAPSHOTS, CONV
 CACHE_TTL = 6 * 3600
 
 
+_init_lock = threading.Lock()
+
+
 def _load_credentials():
+    with _init_lock:                 # 동시에 두 번 초기화하지 않도록
+        _init_firebase()
+
+
+def _init_firebase():
     import firebase_admin
     from firebase_admin import credentials
 

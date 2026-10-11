@@ -42,6 +42,12 @@ async def lifespan(_app):
             demo_seed()
         except Exception as e:   # 시세를 못 받아도 서버는 켠다
             print("[메모리 모드] 데모 데이터 준비 실패:", e)
+    else:
+        try:                     # 첫 요청이 오기 전에 Firestore 연결을 미리 만든다
+            from .repo import get_repo
+            get_repo()
+        except Exception as e:
+            print("[Firestore] 시작 시 연결 실패 (첫 요청 때 다시 시도):", e)
     yield
 
 
